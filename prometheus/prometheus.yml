@@ -1,0 +1,17 @@
+global:
+  scrape_interval:     15s   # Intervalo padrão de coleta
+  evaluation_interval: 15s   # Intervalo de avaliação de regras
+
+scrape_configs:
+  # Métricas do próprio Prometheus
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Métricas do http-server-projeto-korp
+  # Coleta: http_requests_total e service_up (expostos em /metrics)
+  - job_name: "http-server-projeto-korp"
+    static_configs:
+      - targets: ["http-server-projeto-korp:8080"]
+    metrics_path: /metrics
+    scrape_interval: 10s

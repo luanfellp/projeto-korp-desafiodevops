@@ -1,0 +1,226 @@
+---
+# =============================================================
+# Playbook: Provisionar ambiente http-server-projeto-korp
+# Execução: ansible-playbook -i inventory.ini playbook.yml
+# =============================================================
+- name: "Provisionar ambiente http-server-projeto-korp"
+  hosts: all
+  become: true
+
+  vars:
+    project_dir: /opt/projeto-korp
+    docker_keyring: /etc/apt/keyrings/docker.gpg
+    docker_list: /etc/apt/sources.list.d/docker.list
+
+  # ───────────────────────────────────────────────────────────
+  # PRÉ-CONDIÇÃO: garantir sistema baseado em Debian/Ubuntu
+  # ───────────────────────────────────────────────────────────
+  pre_tasks:
+    - name: "[Pre] Verificar sistema operacional suportado"
+      assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: >
+          Este playbook suporta apenas sistemas Debian/Ubuntu.
+          OS detectado: {{ ansible_os_family }}
+
+  tasks:
+
+    # =========================================================
+    # BLOCO 1 — Instalação do Docker
+    # =========================================================
+    - name: "[Docker] Remover versões antigas do Docker (se existirem)"
+      apt:
+        name:
+          - docker
+          - docker-engine
+          - docker.io
+          - containerd
+          - runc
+        state: absent
+      ignore_errors: true
+
+    - name: "[Docker] Atualizar cache APT e instalar dependências"
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - python3-pip
+          - wget
+        state: present
+        update_cache: true
+
+    - name: "[Docker] Criar diretório de keyrings"
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: "[Docker] Adicionar chave GPG oficial do Docker"
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+          | gpg --dearmor -o {{ docker_keyring }}
+        chmod a+r {{ docker_keyring }}
+      args:
+        creates: "{{ docker_keyring }}"
+
+    - name: "[Docker] Adicionar repositório estável do Docker"
+      shell: |
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by={{ docker_keyring }}] \
+          https://download.docker.com/linux/ubuntu \
+          $(lsb_release -cs) stable" \
+          | tee {{ docker_list }} > /dev/null
+      args:
+        creates: "{{ docker_list }}"
+
+    - name: "[Docker] Instalar Docker Engine + Compose Plugin"
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: "[Docker] Iniciar e habilitar serviço Docker"
+      systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: "[Docker] Verificar instalação (docker info)"
+      command: docker info
+      register: docker_info
+      changed_when: false
+
+    - name: "[Docker] Exibir versão instalada"
+      command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: "[Docker] Versão"
+      debug:
+        msg: "{{ docker_version.stdout }}"
+
+    # =========================================================
+    # BLOCO 2 — Preparação do Projeto
+    # =========================================================
+    - name: "[Projeto] Criar diretório do projeto em {{ project_dir }}"
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: "[Projeto] Copiar todos os arquivos do projeto para o host"
+      copy:
+        src: "{{ playbook_dir }}/../"
+        dest: "{{ project_dir }}/"
+        directory_mode: "0755"
+        mode: preserve
+
+    # =========================================================
+    # BLOCO 3 — Rede Docker
+    # =========================================================
+    # O Docker Compose cria e gerencia a rede "projeto-korp-net" com
+    # os labels internos corretos. Se existir uma rede de mesmo nome
+    # criada manualmente (sem esses labels), o Compose recusa subir.
+    # A task abaixo remove a rede órfã antes de cada execução —
+    # o Compose a recria em seguida com tudo correto.
+    - name: "[Rede] Remover rede 'projeto-korp-net' órfã, se existir"
+      shell: docker network rm projeto-korp-net 2>/dev/null || true
+      changed_when: false
+
+    # =========================================================
+    # BLOCO 4 — Build e Execução dos Containers
+    # =========================================================
+    - name: "[Compose] Parar e remover containers existentes (idempotência)"
+      shell: docker compose down --remove-orphans
+      args:
+        chdir: "{{ project_dir }}"
+      ignore_errors: true
+      changed_when: false
+
+    - name: "[Compose] Build da imagem http-server-projeto-korp"
+      shell: docker compose build http-server-projeto-korp
+      args:
+        chdir: "{{ project_dir }}"
+      register: build_output
+
+    - name: "[Compose] Iniciar todos os containers em background"
+      shell: docker compose up -d
+      args:
+        chdir: "{{ project_dir }}"
+      register: compose_output
+
+    - name: "[Compose] Exibir saída do docker compose up"
+      debug:
+        msg: "{{ compose_output.stdout_lines }}"
+
+    # =========================================================
+    # BLOCO 5 — Configuração já contemplada nos arquivos
+    #           (NGINX e monitoramento são inicializados pelo
+    #            Compose com os volumes montados)
+    # =========================================================
+    - name: "[Config] NGINX — configuração aplicada via volume"
+      debug:
+        msg: >
+          Proxy reverso configurado em
+          {{ project_dir }}/nginx/conf.d/http-server-projeto-korp.conf
+
+    - name: "[Config] Prometheus — coleta configurada via volume"
+      debug:
+        msg: >
+          Prometheus configurado em
+          {{ project_dir }}/prometheus/prometheus.yml
+
+    - name: "[Config] Grafana — datasource e dashboard provisionados via volume"
+      debug:
+        msg: >
+          Grafana provisionado em
+          {{ project_dir }}/grafana/provisioning/
+
+    # =========================================================
+    # BLOCO 6 — Validação do Serviço
+    # =========================================================
+    - name: "[Validação] Aguardar NGINX ficar disponível (até 60s)"
+      wait_for:
+        host: localhost
+        port: 80
+        delay: 3
+        timeout: 60
+        state: started
+
+    - name: "[Validação] Aguardar /projeto-korp responder HTTP 200"
+      uri:
+        url: "http://localhost:80/projeto-korp"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: service_response
+      retries: 12
+      delay: 5
+      until: service_response.status == 200
+
+    - name: "[Validação] Resposta do serviço http-server-projeto-korp"
+      debug:
+        msg: "{{ service_response.json }}"
+
+    # =========================================================
+    # BLOCO 7 — Resumo Final
+    # =========================================================
+    - name: "[Resumo] Ambiente provisionado com sucesso!"
+      debug:
+        msg:
+          - "============================================================"
+          - "         AMBIENTE http-server-projeto-korp                  "
+          - "============================================================"
+          - "  Servico (via NGINX):  http://localhost:80/projeto-korp    "
+          - "  Prometheus:           http://localhost:9090               "
+          - "  Grafana:              http://localhost:3000               "
+          - "         login: admin / senha: admin                        "
+          - "============================================================"

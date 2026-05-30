@@ -1,0 +1,23 @@
+# Sistema
+.DS_Store
+
+# Go
+app/go.sum
+app/tmp/
+app/bin/
+
+# Docker / logs
+*.log
+
+# Ansible
+*.retry
+
+# VS Code local
+.vscode/
+
+# Ambiente
+.env
+.env.*
+
+# Arquivos compactados
+*.zip
