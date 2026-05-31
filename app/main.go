@@ -41,11 +41,6 @@ func init() {
 	prometheus.MustRegister(httpRequestsTotal)
 	prometheus.MustRegister(serviceUp)
 	serviceUp.Set(1) // sinaliza que o serviço está no ar
-
-	var err error
-	saoPauloTZ, err = time.LoadLocation("America/Sao_Paulo")
-	if err != nil {
-		log.Fatalf("Erro ao carregar timezone: %v", err)
 	}
 }
 
