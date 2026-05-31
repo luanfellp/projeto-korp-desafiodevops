@@ -41,7 +41,7 @@ func init() {
 	prometheus.MustRegister(httpRequestsTotal)
 	prometheus.MustRegister(serviceUp)
 	serviceUp.Set(1) // sinaliza que o serviço está no ar
-	}
+	
 }
 
 // responseWriter encapsula http.ResponseWriter para capturar o status HTTP
